@@ -1,4 +1,5 @@
 Synthetic Integrity Digital Twin (PIML + PINN Framework)
+
 Overview
 
 This project generates a fully synthetic refinery-style digital twin including:
