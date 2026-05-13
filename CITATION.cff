@@ -34,10 +34,12 @@ license: MIT
 version: "1.0.1"
 date-released: "2026-05-13"
 identifiers:
+  - type: doi
+    value: "10.5281/zenodo.20172483"
+    description: "Concept DOI (always resolves to latest version)"
+  - type: doi
+    value: "10.5281/zenodo.20172484"
+    description: "Version DOI (pinned to v1.0.1)"
   - type: url
     value: "https://github.com/felipearocha/synthetic-integrity-digital-twin-piml/releases/tag/v1.0.1"
     description: "GitHub release tag v1.0.1"
-  # After first Zenodo release, replace the doi block below with the real value:
-  # - type: doi
-  #   value: "10.5281/zenodo.XXXXXXX"
-  #   description: "Concept DOI (always resolves to latest version)"
