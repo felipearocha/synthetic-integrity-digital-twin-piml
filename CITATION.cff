@@ -1,0 +1,43 @@
+cff-version: 1.2.0
+title: "Synthetic Integrity Digital Twin (PIML + PINN Framework) - Integrity Code Series Bonus"
+message: "If you use this software, please cite it using the metadata below."
+type: software
+authors:
+  - family-names: Rocha
+    given-names: Felipe
+    affiliation: "Independent Researcher"
+    # orcid: "https://orcid.org/0000-0000-0000-0000"  # TODO: replace once ORCID is provisioned
+repository-code: "https://github.com/felipearocha/synthetic-integrity-digital-twin-piml"
+url: "https://github.com/felipearocha/synthetic-integrity-digital-twin-piml"
+abstract: >
+  Fully synthetic refinery-style digital-twin framework for integrity analytics architecture design and Physics-Informed Machine Learning experimentation. Generates 3D equipment models (tanks, vessels, columns, pumps, exchangers), routed piping topology, corrosion and chemical attributes, RBI-style integrity metadata, 100 synthetic SCC alternative scenarios, and an optional Physics-Informed Neural Network demo. Conceptually aligned with API 570, API 571, API 580/581, API 579-1/ASME FFS-1 and ASME B31.3. All data is synthetic and anonymized. Bonus entry in the Integrity Code Series. Intended for research, digital-twin prototyping, integrity analytics architecture design, and AI experimentation for corrosion and cracking. It is NOT a certified engineering calculator.
+keywords:
+  - digital twin
+  - PINN
+  - physics-informed neural network
+  - PIML
+  - synthetic data
+  - refinery
+  - RBI
+  - risk-based inspection
+  - stress corrosion cracking
+  - SCC
+  - API 570
+  - API 571
+  - API 580
+  - API 581
+  - API 579
+  - ASME FFS-1
+  - 3D visualization
+  - integrity analytics
+license: MIT
+version: "1.0.1"
+date-released: "2026-05-13"
+identifiers:
+  - type: url
+    value: "https://github.com/felipearocha/synthetic-integrity-digital-twin-piml/releases/tag/v1.0.1"
+    description: "GitHub release tag v1.0.1"
+  # After first Zenodo release, replace the doi block below with the real value:
+  # - type: doi
+  #   value: "10.5281/zenodo.XXXXXXX"
+  #   description: "Concept DOI (always resolves to latest version)"
