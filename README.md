@@ -67,7 +67,58 @@ Optional physics-informed neural network to:
 - Roll out a Paris-type crack growth law, with soft penalties on its parameters
 - Demonstrate hybrid physics + ML architecture
 
-Known limitation: the trained model does not beat a constant baseline on its synthetic targets, and the rolled-out crack depth stays at its initial value. Treat it as an architecture demo, not a predictor.
+## PINN Demo Results
+
+Printed at the end of each run. 100 synthetic scenarios, 80 for training, 20 held out. The baseline is a constant equal to the training mean. Measured with PyTorch 2.15 on CPU.
+
+| Held-out RMSE | Model | Constant baseline |
+|---|---|---|
+| SCC susceptibility (0–1) | 0.271 | 0.352 |
+| Crack depth at 5 years (mm) | 15.67 | 4.26 |
+
+The susceptibility head beats the baseline. The crack depth rollout does not: it fits the training rows (RMSE 0.26 mm) but fails on held-out rows, and 2 of the 20 reach the 50 mm cap. Over 5 different splits, susceptibility beat the baseline every time (0.168–0.291 against 0.288–0.377, one of them by a small margin) and depth lost every time (5.42–15.67 mm against 3.33–4.94 mm).
+
+## Model Equations
+
+Surrogate stress term and stress intensity range:
+
+```math
+\sigma = 12\,p\,\mathrm{clip}\left(\frac{d}{0.2},\,0.4,\,2.5\right), \qquad \Delta K = \sigma\sqrt{\frac{a}{10}}
+```
+
+with $p$ the operating pressure (MPa), $d$ the nominal size (m) and $a$ the crack depth (mm). The scaling is arbitrary, so $\sigma$ and $\Delta K$ are surrogates and are not in MPa or MPa√m.
+
+Paris-type growth rate with a relative residual:
+
+```math
+\frac{da}{dN} = \max\left(0,\ e^{\ln C}\,\Delta K^{m}\left[1 + 0.05\,r\left(s - \frac{1}{2}\right)\right]\right)
+```
+
+The network outputs $\ln C$, $m$, $r \ge 0$ and the susceptibility $s$ for each row.
+
+Explicit rollout over 5 years in 49 steps, at an assumed 200,000 cycles per year:
+
+```math
+a_{k+1} = \min\left(a_k + \frac{da}{dN}\,\Delta N,\ 50\right), \qquad a_0 = 0.5, \qquad \Delta N = \frac{5 \times 200000}{49} \approx 20408
+```
+
+Training loss:
+
+```math
+L = L_s + 0.35\,L_a + 0.05\,L_m + 0.02\,L_C + 0.01\,\mathrm{mean}(r^2)
+```
+
+where $L_s$ and $L_a$ are the mean squared errors on susceptibility and on depth at 5 years. The constraints are soft penalties, not hard constraints:
+
+```math
+L_m = \mathrm{mean}\left[\max(0,\,2-m)^2 + \max(0,\,m-6)^2\right]
+```
+
+```math
+L_C = \mathrm{mean}\left[\max(0,\,-22-\ln C)^2 + \max(0,\,\ln C+14)^2\right]
+```
+
+The band for $\ln C$, with $C$ in mm/cycle, is an assumed scale sized for mm-scale growth. It is not a published Paris constant.
 
 ## Installation
 
@@ -89,6 +140,13 @@ python synthetic_unit_piml_pinn.py
 
 Without PyTorch the script skips the PINN demo. With PyTorch installed, add `--no-ml` to skip it.
 
+Tests need PyTorch and pytest:
+
+```bash
+pip install pytest
+pytest
+```
+
 ## Outputs
 
 Written next to the script:
@@ -99,6 +157,14 @@ Written next to the script:
 - `scc_alternatives_100.tsv`
 - `synthetic_refinery_unit_3d.html`
 - `pinn_checkpoint.pt` (PINN demo only)
+
+## Limitations
+
+- The PINN demo is an architecture demo, not a predictor. Its crack depth rollout loses to a constant baseline on held-out rows.
+- The synthetic depth target does not depend on pressure or size, but $\Delta K$ does. The network has to cancel that dependence through $\ln C$, which is the likely cause of the held-out failure.
+- $\ln C$ and $m$ are free for each row, so the Paris law fixes the shape of the growth curve, not its rate.
+- The soft penalty does not hold $m$ in its band: 0 of 20 held-out rows have $m$ in $[2, 6]$ (at most 15% over 5 splits).
+- Training and test data are synthetic. No result here is validated against inspection data.
 
 ## Future Extensions
 
