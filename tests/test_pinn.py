@@ -45,3 +45,17 @@ def test_crack_grows_after_training(scc_df, monkeypatch):
     monkeypatch.setattr(S, "simulate_crack_growth_torch", spy)
     S.train_pinn_demo(scc_df)
     assert float(last["traj"][:, -1].median()) > 2 * float(last["traj"][:, 0].median())
+
+
+def test_training_is_reproducible(scc_df):
+    def weights():
+        S.train_pinn_demo(scc_df, epochs=2)
+        return torch.load(S.OUT_PINN, weights_only=False)["state_dict"]
+
+    a, b = weights(), weights()
+    assert all(torch.equal(a[k], b[k]) for k in a)
+
+
+def test_heldout_susceptibility_beats_constant(scc_df):
+    m = S.train_pinn_demo(scc_df)["metrics"]
+    assert m["susceptibility_rmse"] < m["susceptibility_rmse_constant"]
