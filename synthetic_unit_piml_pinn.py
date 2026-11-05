@@ -15,10 +15,11 @@ What you get (single-run):
    hover tooltips, and "crack overlays" on selected high-risk lines.
 
 4) PIML/PINN model demo for cracking corrosion (screening-level):
-   - Predicts SCC susceptibility (0-1)
-   - Predicts crack depth growth a(t) using physics-informed constraints:
+   - Fits SCC susceptibility (0-1)
+   - Rolls out crack depth a(t) with soft penalties on the parameters of:
        da/dN = C * (ΔK)^m (Paris-type surrogate)
-     with ML residual for unmodeled effects.
+     with a small relative ML residual for unmodeled effects.
+   - Prints held-out metrics against a constant baseline
    - Saves trained weights to: pinn_checkpoint.pt
 
 Important:
@@ -33,6 +34,8 @@ from __future__ import annotations
 import math
 import random
 import hashlib
+import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -68,6 +71,16 @@ OUT_EQUIP = OUT_DIR / "equipment_anonymized.tsv"
 OUT_PIPES = OUT_DIR / "piping_attributes_anonymized.tsv"
 OUT_SCC = OUT_DIR / "scc_alternatives_100.tsv"
 OUT_PINN = OUT_DIR / "pinn_checkpoint.pt"
+
+# ----------------------------
+# Paris surrogate scale
+# ----------------------------
+# [ASSUMED] ln(C) centre, C in mm/cycle: sized so growth over the rollout horizon is
+# mm-scale for the surrogate DeltaK below. That DeltaK is not in MPa*sqrt(m), so no
+# published C applies to it.
+LOGC_REF = -18.0
+LOGC_BAND = 4.0  # [ASSUMED] half-width of the soft ln(C) band
+RESID_FRAC = 0.05  # residual weight, as a fraction of the Paris rate
 
 # ----------------------------
 # Synthetic standards metadata (labels only)
@@ -527,13 +540,16 @@ def build_ml_dataset(scc_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, List
     y = scc_df["SCC Susceptibility (0-1)"].astype(float).values.reshape(-1, 1)
     return X, y, feat_cols
 
-class PIML_PINN(nn.Module):
+class PIML_PINN(nn.Module if nn is not None else object):
     """
     Two-head network:
       - head_susc: SCC susceptibility (0-1)
       - head_phys: outputs (logC, m, resid_scale) for Paris-type surrogate
     Physics:
-      a_{t+1} = a_t + da/dN * dN,  da/dN = exp(logC) * (ΔK)^m + ML_residual
+      a_{t+1} = a_t + da/dN * dN
+      da/dN = exp(logC) * (ΔK)^m * (1 + RESID_FRAC * resid_scale * (susc - 0.5))
+    The network sets logC, m and the residual per row, so the Paris law fixes the
+    shape of the growth curve, not its rate.
     """
     def __init__(self, in_dim: int, hidden: int = 64):
         super().__init__()
@@ -549,7 +565,7 @@ class PIML_PINN(nn.Module):
         h = self.backbone(x)
         susc = self.head_susc(h)
         phys = self.head_phys(h)
-        logC = phys[:, 0:1]
+        logC = LOGC_REF + phys[:, 0:1]
         m = 1.0 + torch.nn.functional.softplus(phys[:, 1:2])  # m >= 1
         resid_scale = torch.nn.functional.softplus(phys[:, 2:3])  # >= 0
         return susc, logC, m, resid_scale
@@ -570,6 +586,7 @@ def deltaK_surrogate(op_kpag_t: torch.Tensor, dn_in_t: torch.Tensor) -> torch.Te
 def simulate_crack_growth_torch(
     model: PIML_PINN,
     x: torch.Tensor,
+    x_raw: torch.Tensor,
     a0_mm: float = 0.5,
     years: float = 5.0,
     cycles_per_year: float = 2.0e5,
@@ -577,13 +594,14 @@ def simulate_crack_growth_torch(
 ) -> torch.Tensor:
     """
     Returns crack depth trajectory a(t) in mm (batch, n_steps).
+    x feeds the network (standardized); x_raw feeds ΔK (kPag, inches).
     Enforces monotonicity by clamping da >= 0.
     """
     susc, logC, m, resid_scale = model(x)
     # pick key columns for ΔK surrogate by index
     # columns: OT, OP, DN, V, WC, Cl, pH, H2S, CR
-    op = x[:, 1:2]
-    dn = x[:, 2:3]
+    op = x_raw[:, 1:2]
+    dn = x_raw[:, 2:3]
     DK = deltaK_surrogate(op, dn)
 
     dt_year = years / (n_steps - 1)
@@ -591,14 +609,13 @@ def simulate_crack_growth_torch(
     a = torch.full((x.shape[0], 1), float(a0_mm), device=x.device)
     traj = [a]
 
-    # ML residual is a small correction scaled by susceptibility
+    # ML residual is a small relative correction scaled by susceptibility
     for _ in range(n_steps - 1):
         # embed a in DK via sqrt(a) style scaling
         DK_eff = DK * torch.sqrt(torch.clamp(a / 10.0, 1e-6, 1e3))  # a in mm scaled to ~cm
         dadN = torch.exp(logC) * torch.pow(torch.clamp(DK_eff, 1e-6, 1e6), m)
-        # residual term: limited magnitude
         resid = resid_scale * (susc - 0.5)
-        dadN = torch.clamp(dadN + 0.05 * resid, 0.0, 1e6)
+        dadN = torch.clamp(dadN * (1.0 + RESID_FRAC * resid), 0.0, 1e6)
         a = a + dadN * dN
         a = torch.clamp(a, 0.0, 50.0)
         traj.append(a)
@@ -612,31 +629,40 @@ def train_pinn_demo(
     device: str = "cpu",
 ) -> Dict:
     _require_torch()
+    torch.manual_seed(SEED)
 
     X, y, feat_cols = build_ml_dataset(scc_df)
-
-    scaler = FeatureScaler()
-    Xs = scaler.fit_transform(X).astype(np.float32)
     y = y.astype(np.float32)
 
-    xt = torch.tensor(Xs, device=device)
-    yt = torch.tensor(y, device=device)
-
-    model = PIML_PINN(in_dim=xt.shape[1], hidden=72).to(device)
-    opt = optim.Adam(model.parameters(), lr=lr)
-
-    # Create a synthetic "target" crack depth after 5y based on susceptibility, temp, chloride
+    # Synthetic "target" crack depth after 5y based on susceptibility, temp, chloride.
     # This is still simulated to enable training without real inspection crack sizing data.
     ot = X[:, 0]
     cl = X[:, 5]
     ph = X[:, 6]
-    # crack depth mm after 5y (synthetic)
     a5 = 0.6 + 8.5 * y[:, 0] + 0.006 * cl + 0.02 * np.maximum(0, ot - 60) + 0.4 * np.maximum(0, 6.5 - ph)
-    a5 = np.clip(a5, 0.6, 25.0).astype(np.float32)
-    a5t = torch.tensor(a5.reshape(-1, 1), device=device)
+    a5 = np.clip(a5, 0.6, 25.0).astype(np.float32).reshape(-1, 1)
 
-    # Physics regularization targets (range constraints)
-    # Encourage m in [2,6] and C in a plausible log range for the surrogate.
+    # Held-out rows: the metrics below are never computed on training data
+    idx = np.random.RandomState(SEED).permutation(len(X))
+    n_test = len(X) // 5
+    test, train = idx[:n_test], idx[n_test:]
+
+    scaler = FeatureScaler()
+    scaler.fit(X[train])
+    Xs = scaler.transform(X).astype(np.float32)
+
+    def tensors(rows):
+        return [
+            torch.tensor(v[rows], device=device)
+            for v in (Xs, X.astype(np.float32), y, a5)
+        ]
+
+    xt, xr, yt, a5t = tensors(train)
+
+    model = PIML_PINN(in_dim=xt.shape[1], hidden=72).to(device)
+    opt = optim.Adam(model.parameters(), lr=lr)
+
+    # Soft penalties: keep m in [2,6] and ln(C) in a band around LOGC_REF
     for ep in range(epochs):
         model.train()
         opt.zero_grad()
@@ -647,25 +673,48 @@ def train_pinn_demo(
         loss_s = torch.mean((susc - yt) ** 2)
 
         # rollout crack growth and match terminal depth target
-        traj = simulate_crack_growth_torch(model, xt, years=5.0, n_steps=50)
-        aT = traj[:, -1:].detach() * 0.0 + traj[:, -1:]  # keep graph
-        loss_a = torch.mean((aT - a5t) ** 2)
+        traj = simulate_crack_growth_torch(model, xt, xr, years=5.0, n_steps=50)
+        loss_a = torch.mean((traj[:, -1:] - a5t) ** 2)
 
         # physics-informed penalties
         loss_m = torch.mean(torch.relu(2.0 - m) ** 2 + torch.relu(m - 6.0) ** 2)
-        loss_c = torch.mean(torch.relu(-10.0 - logC) ** 2 + torch.relu(logC - 2.0) ** 2)
+        loss_c = torch.mean(torch.relu(LOGC_REF - LOGC_BAND - logC) ** 2 + torch.relu(logC - LOGC_REF - LOGC_BAND) ** 2)
         loss_res = torch.mean(resid ** 2)
 
         loss = loss_s + 0.35 * loss_a + 0.05 * loss_m + 0.02 * loss_c + 0.01 * loss_res
         loss.backward()
         opt.step()
 
+    # held-out metrics against a constant predictor (the training mean)
+    model.eval()
+    xe, xre, ye, a5e = tensors(test)
+    with torch.no_grad():
+        susc_e, _, m_e, _ = model(xe)
+        depth_e = simulate_crack_growth_torch(model, xe, xre, years=5.0, n_steps=50)[:, -1:]
+        depth_t = simulate_crack_growth_torch(model, xt, xr, years=5.0, n_steps=50)[:, -1:]
+
+    def rmse(pred, target):
+        return float(torch.sqrt(torch.mean((pred - target) ** 2)))
+
+    metrics = {
+        "n_train": len(train),
+        "n_test": len(test),
+        "susceptibility_rmse": rmse(susc_e, ye),
+        "susceptibility_rmse_constant": rmse(yt.mean(), ye),
+        "depth_rmse_mm": rmse(depth_e, a5e),
+        "depth_rmse_constant_mm": rmse(a5t.mean(), a5e),
+        "depth_rmse_train_mm": rmse(depth_t, a5t),
+        "depth_at_50mm_cap_share": float((depth_e >= 50.0).float().mean()),
+        "m_in_band_share": float(((m_e >= 2.0) & (m_e <= 6.0)).float().mean()),
+    }
+    print(json.dumps(metrics, indent=2))
+
     # save
     torch.save(
         {"state_dict": model.state_dict(), "mu": scaler.mu, "sig": scaler.sig, "feat_cols": feat_cols},
         str(OUT_PINN),
     )
-    return {"checkpoint": str(OUT_PINN), "feat_cols": feat_cols}
+    return {"checkpoint": str(OUT_PINN), "feat_cols": feat_cols, "metrics": metrics}
 
 # ----------------------------
 # Main synthetic unit builder
@@ -851,5 +900,7 @@ def run(no_ml: bool = False) -> None:
         train_pinn_demo(scc_df, device="cpu")
 
 if __name__ == "__main__":
-    # If you do not want ML, set no_ml=True
-    run(no_ml=False)
+    # The PINN demo needs PyTorch; pass --no-ml to skip it.
+    if torch is None:
+        print("PyTorch not installed: skipping the PINN demo.")
+    run(no_ml=torch is None or "--no-ml" in sys.argv)

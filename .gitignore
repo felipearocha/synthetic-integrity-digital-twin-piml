@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+.venv/
+*.tsv
+synthetic_refinery_unit_3d.html
+pinn_checkpoint.pt
