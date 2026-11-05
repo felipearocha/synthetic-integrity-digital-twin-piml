@@ -32,3 +32,16 @@ def test_training_feeds_deltaK_physical_units(scc_df, monkeypatch):
     S.train_pinn_demo(scc_df, epochs=1)
     # make_pipe_attrs draws operating pressure from 50-2500 kPag
     assert float(seen[0].min()) >= 50.0
+
+
+def test_crack_grows_after_training(scc_df, monkeypatch):
+    last = {}
+    real = S.simulate_crack_growth_torch
+
+    def spy(*args, **kwargs):
+        last["traj"] = real(*args, **kwargs)
+        return last["traj"]
+
+    monkeypatch.setattr(S, "simulate_crack_growth_torch", spy)
+    S.train_pinn_demo(scc_df)
+    assert float(last["traj"][:, -1].median()) > 2 * float(last["traj"][:, 0].median())

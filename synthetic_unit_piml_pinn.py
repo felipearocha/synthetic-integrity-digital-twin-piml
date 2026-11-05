@@ -73,6 +73,17 @@ OUT_SCC = OUT_DIR / "scc_alternatives_100.tsv"
 OUT_PINN = OUT_DIR / "pinn_checkpoint.pt"
 
 # ----------------------------
+# Paris surrogate scale
+# ----------------------------
+# [ASSUMED] ln(C) centre, C in mm/cycle: sized so growth over the rollout horizon is
+# mm-scale for the surrogate DeltaK below. That DeltaK is not in MPa*sqrt(m), so no
+# published C applies to it.
+LOGC_REF = -18.0
+LOGC_BAND = 4.0  # [ASSUMED] half-width of the soft ln(C) band
+RESID_FRAC = 0.05  # residual weight, as a fraction of the Paris rate
+
+
+# ----------------------------
 # Synthetic standards metadata (labels only)
 # ----------------------------
 # Keep these as references in metadata for GitHub/readme usage.
@@ -536,7 +547,10 @@ class PIML_PINN(nn.Module if nn is not None else object):
       - head_susc: SCC susceptibility (0-1)
       - head_phys: outputs (logC, m, resid_scale) for Paris-type surrogate
     Physics:
-      a_{t+1} = a_t + da/dN * dN,  da/dN = exp(logC) * (ΔK)^m + ML_residual
+      a_{t+1} = a_t + da/dN * dN
+      da/dN = exp(logC) * (ΔK)^m * (1 + RESID_FRAC * resid_scale * (susc - 0.5))
+    The network sets logC, m and the residual per row, so the Paris law fixes the
+    shape of the growth curve, not its rate.
     """
     def __init__(self, in_dim: int, hidden: int = 64):
         super().__init__()
@@ -552,7 +566,7 @@ class PIML_PINN(nn.Module if nn is not None else object):
         h = self.backbone(x)
         susc = self.head_susc(h)
         phys = self.head_phys(h)
-        logC = phys[:, 0:1]
+        logC = LOGC_REF + phys[:, 0:1]
         m = 1.0 + torch.nn.functional.softplus(phys[:, 1:2])  # m >= 1
         resid_scale = torch.nn.functional.softplus(phys[:, 2:3])  # >= 0
         return susc, logC, m, resid_scale
@@ -596,14 +610,13 @@ def simulate_crack_growth_torch(
     a = torch.full((x.shape[0], 1), float(a0_mm), device=x.device)
     traj = [a]
 
-    # ML residual is a small correction scaled by susceptibility
+    # ML residual is a small relative correction scaled by susceptibility
     for _ in range(n_steps - 1):
         # embed a in DK via sqrt(a) style scaling
         DK_eff = DK * torch.sqrt(torch.clamp(a / 10.0, 1e-6, 1e3))  # a in mm scaled to ~cm
         dadN = torch.exp(logC) * torch.pow(torch.clamp(DK_eff, 1e-6, 1e6), m)
-        # residual term: limited magnitude
         resid = resid_scale * (susc - 0.5)
-        dadN = torch.clamp(dadN + 0.05 * resid, 0.0, 1e6)
+        dadN = torch.clamp(dadN * (1.0 + RESID_FRAC * resid), 0.0, 1e6)
         a = a + dadN * dN
         a = torch.clamp(a, 0.0, 50.0)
         traj.append(a)
@@ -642,7 +655,7 @@ def train_pinn_demo(
     a5t = torch.tensor(a5.reshape(-1, 1), device=device)
 
     # Physics regularization targets (range constraints)
-    # Encourage m in [2,6] and C in a plausible log range for the surrogate.
+    # Soft penalties: keep m in [2,6] and ln(C) in a band around LOGC_REF
     for ep in range(epochs):
         model.train()
         opt.zero_grad()
@@ -659,7 +672,7 @@ def train_pinn_demo(
 
         # physics-informed penalties
         loss_m = torch.mean(torch.relu(2.0 - m) ** 2 + torch.relu(m - 6.0) ** 2)
-        loss_c = torch.mean(torch.relu(-10.0 - logC) ** 2 + torch.relu(logC - 2.0) ** 2)
+        loss_c = torch.mean(torch.relu(LOGC_REF - LOGC_BAND - logC) ** 2 + torch.relu(logC - LOGC_REF - LOGC_BAND) ** 2)
         loss_res = torch.mean(resid ** 2)
 
         loss = loss_s + 0.35 * loss_a + 0.05 * loss_m + 0.02 * loss_c + 0.01 * loss_res
