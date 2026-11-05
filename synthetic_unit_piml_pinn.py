@@ -573,6 +573,7 @@ def deltaK_surrogate(op_kpag_t: torch.Tensor, dn_in_t: torch.Tensor) -> torch.Te
 def simulate_crack_growth_torch(
     model: PIML_PINN,
     x: torch.Tensor,
+    x_raw: torch.Tensor,
     a0_mm: float = 0.5,
     years: float = 5.0,
     cycles_per_year: float = 2.0e5,
@@ -580,13 +581,14 @@ def simulate_crack_growth_torch(
 ) -> torch.Tensor:
     """
     Returns crack depth trajectory a(t) in mm (batch, n_steps).
+    x feeds the network (standardized); x_raw feeds ΔK (kPag, inches).
     Enforces monotonicity by clamping da >= 0.
     """
     susc, logC, m, resid_scale = model(x)
     # pick key columns for ΔK surrogate by index
     # columns: OT, OP, DN, V, WC, Cl, pH, H2S, CR
-    op = x[:, 1:2]
-    dn = x[:, 2:3]
+    op = x_raw[:, 1:2]
+    dn = x_raw[:, 2:3]
     DK = deltaK_surrogate(op, dn)
 
     dt_year = years / (n_steps - 1)
@@ -623,6 +625,7 @@ def train_pinn_demo(
     y = y.astype(np.float32)
 
     xt = torch.tensor(Xs, device=device)
+    xr = torch.tensor(X.astype(np.float32), device=device)
     yt = torch.tensor(y, device=device)
 
     model = PIML_PINN(in_dim=xt.shape[1], hidden=72).to(device)
@@ -650,7 +653,7 @@ def train_pinn_demo(
         loss_s = torch.mean((susc - yt) ** 2)
 
         # rollout crack growth and match terminal depth target
-        traj = simulate_crack_growth_torch(model, xt, years=5.0, n_steps=50)
+        traj = simulate_crack_growth_torch(model, xt, xr, years=5.0, n_steps=50)
         aT = traj[:, -1:].detach() * 0.0 + traj[:, -1:]  # keep graph
         loss_a = torch.mean((aT - a5t) ** 2)
 
