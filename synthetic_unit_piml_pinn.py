@@ -33,6 +33,7 @@ from __future__ import annotations
 import math
 import random
 import hashlib
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -57,6 +58,8 @@ except Exception as exc:  # pragma: no cover
 SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
+if torch is not None:
+    torch.manual_seed(SEED)
 
 # ----------------------------
 # Output paths
@@ -527,7 +530,7 @@ def build_ml_dataset(scc_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, List
     y = scc_df["SCC Susceptibility (0-1)"].astype(float).values.reshape(-1, 1)
     return X, y, feat_cols
 
-class PIML_PINN(nn.Module):
+class PIML_PINN(nn.Module if nn is not None else object):
     """
     Two-head network:
       - head_susc: SCC susceptibility (0-1)
@@ -851,5 +854,7 @@ def run(no_ml: bool = False) -> None:
         train_pinn_demo(scc_df, device="cpu")
 
 if __name__ == "__main__":
-    # If you do not want ML, set no_ml=True
-    run(no_ml=False)
+    # The PINN demo needs PyTorch; pass --no-ml to skip it.
+    if torch is None:
+        print("PyTorch not installed: skipping the PINN demo.")
+    run(no_ml=torch is None or "--no-ml" in sys.argv)
