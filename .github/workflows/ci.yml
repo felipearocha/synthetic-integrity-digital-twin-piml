@@ -19,8 +19,8 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -30,4 +30,10 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       - name: Smoke
-        run: python -c "import sys; print(sys.version)"
+        run: python synthetic_unit_piml_pinn.py
+      - name: Install test dependencies
+        run: |
+          pip install pytest
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Tests
+        run: pytest -q

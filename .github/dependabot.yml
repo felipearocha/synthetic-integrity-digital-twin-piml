@@ -2,6 +2,7 @@ version: 2
 updates:
   - package-ecosystem: pip
     directory: /
+    versioning-strategy: increase-if-necessary
     schedule:
       interval: weekly
       day: monday
@@ -21,3 +22,7 @@ updates:
       - github-actions
     commit-message:
       prefix: "chore(ci)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

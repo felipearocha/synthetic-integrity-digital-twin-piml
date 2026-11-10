@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- PINN demo: DeltaK uses physical pressure and size instead of standardized features.
+- PINN demo: relative residual and rescaled ln(C); the crack depth no longer stays at its initial value.
+- PINN demo: seeded training, and held-out metrics against a constant baseline are printed. Held-out depth still loses to the baseline.
+- Script runs without PyTorch; `--no-ml` added.
+
+### Tests
+- First test suite (5 tests), run in CI.
+
 ### Docs
 - docs(license): normalize LICENSE to canonical MIT (strip leading blank line that confused GitHub auto-detection)
 - docs: insert real Zenodo DOIs (concept 10.5281/zenodo.20172483, version 10.5281/zenodo.20172484)
