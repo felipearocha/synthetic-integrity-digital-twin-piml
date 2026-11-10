@@ -2,6 +2,10 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20172483.svg)](https://doi.org/10.5281/zenodo.20172483)
 
+![3D view of the synthetic refinery unit: vessels, columns, exchangers and pumps joined by routed piping, with wavy crack overlays on the highest-ranked lines](assets/synthetic_refinery_unit_3d.png)
+
+*Static view of the generated 3D model (seed 42). Wavy segments are synthetic crack overlays on the 35 lines ranked highest by SCC score plus a chloride term.*
+
 ## Overview
 
 This project generates a fully synthetic refinery-style digital twin including:
@@ -139,6 +143,8 @@ python synthetic_unit_piml_pinn.py
 ```
 
 Without PyTorch the script skips the PINN demo. With PyTorch installed, add `--no-ml` to skip it.
+
+Add `--png` to also write the static preview `assets/synthetic_refinery_unit_3d.png` (needs `pip install kaleido` and a Chrome install).
 
 Tests need PyTorch and pytest:
 

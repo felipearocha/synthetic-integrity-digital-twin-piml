@@ -71,6 +71,7 @@ OUT_EQUIP = OUT_DIR / "equipment_anonymized.tsv"
 OUT_PIPES = OUT_DIR / "piping_attributes_anonymized.tsv"
 OUT_SCC = OUT_DIR / "scc_alternatives_100.tsv"
 OUT_PINN = OUT_DIR / "pinn_checkpoint.pt"
+OUT_PNG = OUT_DIR / "assets" / "synthetic_refinery_unit_3d.png"
 
 # ----------------------------
 # Paris surrogate scale
@@ -806,7 +807,7 @@ def build_unit() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame
 # ----------------------------
 # 3D renderer
 # ----------------------------
-def render_3d(equip_df: pd.DataFrame, pipes_df: pd.DataFrame, pipes: List[Dict]) -> None:
+def render_3d(equip_df: pd.DataFrame, pipes_df: pd.DataFrame, pipes: List[Dict], png: bool = False) -> None:
     fig = go.Figure()
 
     # Render equipment as shapes by type
@@ -883,10 +884,20 @@ def render_3d(equip_df: pd.DataFrame, pipes_df: pd.DataFrame, pipes: List[Dict])
     )
     fig.write_html(str(OUT_HTML), include_plotlyjs="cdn")
 
+    if png:
+        # Static README preview. Needs kaleido (pip install kaleido) and Chrome.
+        # Tick labels hidden: the layout coordinates are synthetic, with no units.
+        ax = dict(showticklabels=False, title="")
+        fig.update_layout(scene=dict(xaxis=ax, yaxis=ax, zaxis=ax,
+                                     camera=dict(eye=dict(x=1.1, y=-1.35, z=1.15),
+                                                 center=dict(x=0, y=0, z=-0.2))))
+        OUT_PNG.parent.mkdir(exist_ok=True)
+        fig.write_image(str(OUT_PNG), width=1400, height=800)
+
 # ----------------------------
 # CLI-like entry
 # ----------------------------
-def run(no_ml: bool = False) -> None:
+def run(no_ml: bool = False, png: bool = False) -> None:
     topo_df, equip_df, pipes_df, scc_df, pipes = build_unit()
 
     topo_df.to_csv(OUT_TOPO, sep="\t", index=False)
@@ -894,13 +905,14 @@ def run(no_ml: bool = False) -> None:
     pipes_df.to_csv(OUT_PIPES, sep="\t", index=False)
     scc_df.to_csv(OUT_SCC, sep="\t", index=False)
 
-    render_3d(equip_df, pipes_df, pipes)
+    render_3d(equip_df, pipes_df, pipes, png=png)
 
     if not no_ml:
         train_pinn_demo(scc_df, device="cpu")
 
 if __name__ == "__main__":
     # The PINN demo needs PyTorch; pass --no-ml to skip it.
+    # --png also writes the README preview image (needs kaleido).
     if torch is None:
         print("PyTorch not installed: skipping the PINN demo.")
-    run(no_ml=torch is None or "--no-ml" in sys.argv)
+    run(no_ml=torch is None or "--no-ml" in sys.argv, png="--png" in sys.argv)
